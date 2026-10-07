@@ -480,6 +480,50 @@ function describeConnectError(err, definition, url) {
   return parts.length > 0 ? parts.join(" — ") : "connection failed";
 }
 
+const PI_CORE_PACKAGE = "@earendil-works/pi-coding-agent";
+
+// Pi is a peer dependency and doesn't resolve when this CLI is installed as a Pi package, so fall
+// back to the Pi install behind the first `pi` on PATH, the binary the doctor runs for `pi --version`.
+async function importPiCore() {
+  try {
+    return await import(PI_CORE_PACKAGE);
+  } catch (err) {
+    const names = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => `pi${ext}`) : ["pi"];
+    const bin = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
+      .flatMap((dir) => names.map((name) => path.join(dir, name)))
+      .find((file) => {
+        try {
+          fs.accessSync(file, fs.constants.X_OK);
+          return fs.statSync(file).isFile();
+        } catch {
+          return false;
+        }
+      });
+    if (!bin) throw err;
+    const isPiCore = (dir) => {
+      const file = path.join(dir, "package.json");
+      return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, "utf8")).name === PI_CORE_PACKAGE;
+    };
+    let root;
+    if (/\.(cmd|ps1)$/i.test(bin)) {
+      // Windows npm shims sit beside the prefix's node_modules and name the package they launch.
+      const shimmed = path.join(path.dirname(bin), "node_modules", PI_CORE_PACKAGE);
+      if (/node_modules[\\/]@earendil-works[\\/]pi-coding-agent[\\/]/i.test(fs.readFileSync(bin, "utf8")) && isPiCore(shimmed)) root = shimmed;
+    } else {
+      // npm links bin/pi to a file inside Pi's package; only the package that owns that file counts.
+      for (let dir = path.dirname(fs.realpathSync(bin)); !root; dir = path.dirname(dir)) {
+        if (isPiCore(dir)) root = dir;
+        else if (path.dirname(dir) === dir) break;
+      }
+    }
+    if (!root) throw err;
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    const target = pkg.exports?.["."];
+    const entry = typeof target === "string" ? target : target?.import ?? pkg.main;
+    return import(pathToFileURL(path.join(root, entry)).href);
+  }
+}
+
 async function runDoctor(argv, log, error) {
   const json = argv[0] === "--json";
   if (argv.length > (json ? 1 : 0)) {
@@ -516,9 +560,13 @@ async function runDoctor(argv, log, error) {
   let projectTrusted = false;
   if (loaded.projectServers.size > 0) {
     try {
-      // Pi is a peer dependency and may not resolve from where this CLI is installed.
-      const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
-      projectTrusted = new ProjectTrustStore(agentDir.getAgentDir()).get(cwd) === true;
+      const pi = await importPiCore();
+      // Past this check Pi first runs project_trust extension handlers, which doctor can't, so only a stored "trusted" decision counts.
+      if (typeof pi.hasTrustRequiringProjectResources === "function" && !pi.hasTrustRequiringProjectResources(cwd)) {
+        projectTrusted = true;
+      } else {
+        projectTrusted = new pi.ProjectTrustStore(agentDir.getAgentDir()).get(cwd) === true;
+      }
     } catch (err) {
       error(`Could not read Pi's project trust, so project servers are treated as untrusted: ${utils.formatTerminalError(err)}`);
     }
