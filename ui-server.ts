@@ -21,6 +21,7 @@ import {
 import { logger } from "./logger.ts";
 import type { McpServerManager, ServerConnection } from "./server-manager.ts";
 import type { McpExtensionState } from "./state.ts";
+import { buildMcpRequestMeta } from "./state.ts";
 import { SessionRecoveryAuthRequiredError, withSessionRecovery, type SessionRecoveryDeps } from "./session-recovery.ts";
 import { ensureToolCallApproved, isToolCallApprovalRequired } from "./tool-approval.ts";
 import { callToolViaTaskSession } from "./mcp-tasks.ts";
@@ -464,6 +465,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
         const callArgs = {
           name: callParams.name,
           arguments: normalizedArguments,
+          _meta: buildMcpRequestMeta(options.state?.sessionId, callParams._meta),
         };
         let uiResourceUri: string | undefined;
         try {
@@ -538,6 +540,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
               return callToolViaTaskSession(conn.taskSession, {
                 name: callArgs.name,
                 args: callArgs.arguments,
+                meta: callArgs._meta,
                 requestTimeoutMs: requestOptions?.timeout,
                 signal: requestOptions?.signal,
               });

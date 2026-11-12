@@ -1,6 +1,7 @@
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError, type Client } from "@modelcontextprotocol/client";
 import type { McpExtensionState } from "./state.ts";
+import { buildMcpRequestMeta } from "./state.ts";
 import type { DirectToolSpec, McpContent } from "./types.ts";
 import { lazyConnect, getFailureAgeSeconds, clearFailure } from "./init.ts";
 import { abortable, throwIfAborted } from "./abort.ts";
@@ -316,7 +317,7 @@ export function createDirectToolExecutor(
             return await callToolViaTaskSession(conn.taskSession, {
               name: spec.originalName,
               args: normalizedParams ?? {},
-              meta: uiSession?.requestMeta,
+              meta: buildMcpRequestMeta(state.sessionId, uiSession?.requestMeta),
               signal: ownedSignal,
               requestTimeoutMs: requestOptions?.timeout,
             }) as unknown as ClientCallToolResult;
@@ -324,7 +325,7 @@ export function createDirectToolExecutor(
           return abortable(conn.client.callTool({
             name: spec.originalName,
             arguments: normalizedParams,
-            _meta: uiSession?.requestMeta,
+            _meta: buildMcpRequestMeta(state.sessionId, uiSession?.requestMeta),
           }, requestOptions), ownedSignal);
         },
       );

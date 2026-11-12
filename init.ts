@@ -21,6 +21,7 @@ import {
   type ServerCacheEntry,
 } from "./metadata-cache.ts";
 import { McpServerManager, isTransientHttpConnectError } from "./server-manager.ts";
+import { buildMcpIdentityHeaders } from "./session-identity.ts";
 import { buildToolMetadata, totalToolCount } from "./tool-metadata.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
@@ -145,12 +146,14 @@ export async function initializeMcp(
 
   const ownsOAuthRuntime = options.oauthRuntime === undefined;
   const oauthRuntime = options.oauthRuntime ?? createOAuthRuntime(owner.signal);
+  const piSessionId = sessionManager?.getSessionId();
   const manager = new McpServerManager(cwd);
   manager.setRuntimeSignal?.(owner.signal);
   manager.setOAuthRuntime?.(oauthRuntime);
   manager.setDefaultRequestTimeoutMs(config.settings?.requestTimeoutMs);
   manager.setTraceConfig?.(config.settings?.trace);
   manager.setAuthStorageOptions(authStorageOptions);
+  manager.setDynamicHeadersProvider(() => buildMcpIdentityHeaders(piSessionId));
   const samplingAutoApprove = config.settings?.samplingAutoApprove === true;
   if (config.settings?.sampling !== false && (hasUI || samplingAutoApprove)) {
     manager.setSamplingConfig({
@@ -203,6 +206,7 @@ export async function initializeMcp(
     promptMetadataLive,
     serverInstructions,
     config,
+    ...(piSessionId ? { sessionId: piSessionId } : {}),
     programmaticConfig: options.config !== undefined,
     oauthRuntime,
     authStorageOptions,

@@ -2,6 +2,7 @@ import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent"
 import { UrlElicitationRequiredError, type Client, type JsonSchemaType, type JsonSchemaValidator, type Progress, type RequestOptions } from "@modelcontextprotocol/client";
 import { createRequire } from "node:module";
 import type { McpExtensionState } from "./state.ts";
+import { buildMcpRequestMeta } from "./state.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, getToolNameCandidates, isServerDisabled, parseUiPromptHandoff, resolveToolPrefix, type ServerEntry } from "./types.ts";
 import { lazyConnect, markKeepAliveAfterConnect, notifyToolMetadataUpdated, updateServerMetadata, updateMetadataCache, getFailureAgeSeconds, updateStatusBar, clearFailure, recordFailure } from "./init.ts";
@@ -1619,7 +1620,7 @@ export async function executeCall(
           return await callToolViaTaskSession(conn.taskSession, {
             name: toolMeta.originalName,
             args: normalizedArgs ?? {},
-            meta: uiSession?.requestMeta,
+            meta: buildMcpRequestMeta(state.sessionId, uiSession?.requestMeta),
             signal: ownedSignal,
             requestTimeoutMs: requestOptions?.timeout,
           }) as unknown as ClientCallToolResult;
@@ -1627,7 +1628,7 @@ export async function executeCall(
         return abortable(conn.client.callTool({
           name: toolMeta.originalName,
           arguments: normalizedArgs,
-          _meta: uiSession?.requestMeta,
+          _meta: buildMcpRequestMeta(state.sessionId, uiSession?.requestMeta),
         }, requestOptions), ownedSignal);
       },
     );
