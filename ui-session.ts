@@ -331,6 +331,7 @@ export async function maybeStartUiSession(
       state,
       ...(request.onNeedsAuth ? { onNeedsAuth: request.onNeedsAuth } : {}),
       consentManager: state.consentManager,
+      piSessionId: state.sessionId,
       ...(hostContext !== undefined ? { hostContext } : {}),
 
       onMessage: (params: UiMessageParams) => {

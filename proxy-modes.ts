@@ -1,6 +1,7 @@
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { UrlElicitationRequiredError, type Client, type Progress, type RequestOptions } from "@modelcontextprotocol/client";
 import { createRequire } from "node:module";
+import { buildMcpRequestMeta } from "./state.js";
 import type { McpExtensionState } from "./state.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, isServerDisabled, parseUiPromptHandoff } from "./types.ts";
@@ -1333,7 +1334,7 @@ export async function executeCall(
       (conn) => abortable(conn.client.callTool({
         name: toolMeta.originalName,
         arguments: normalizedArgs,
-        _meta: uiSession?.requestMeta,
+        _meta: buildMcpRequestMeta(state.sessionId, uiSession?.requestMeta),
       }, requestOptions), ownedSignal),
     );
 

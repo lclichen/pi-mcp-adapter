@@ -14,6 +14,7 @@ import { formatAuthRequiredMessage, normalizeToolArguments } from "./utils.ts";
 import { buildHostHtmlTemplate, buildCspMetaContent } from "./host-html-template.ts";
 import { logger } from "./logger.ts";
 import type { McpServerManager } from "./server-manager.ts";
+import { buildMcpRequestMeta } from "./state.js";
 import type { McpExtensionState } from "./state.ts";
 import { SessionRecoveryAuthRequiredError, withSessionRecovery, type SessionRecoveryDeps } from "./session-recovery.ts";
 import { ensureToolCallApproved, isToolCallApprovalRequired } from "./tool-approval.ts";
@@ -70,6 +71,7 @@ export interface UiServerOptions {
   onNeedsAuth?: SessionRecoveryDeps["onNeedsAuth"];
   consentManager: ConsentManager;
   hostContext?: UiHostContext;
+  piSessionId?: string | undefined;
   initialResultPromise?: Promise<CallToolResult>;
   sessionToken?: string;
   port?: number;
@@ -430,6 +432,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
         const callArgs = {
           name: callParams.name,
           arguments: normalizedArguments,
+          _meta: buildMcpRequestMeta(options.piSessionId, callParams._meta),
         };
         const toolMeta = {
           name: callParams.name,

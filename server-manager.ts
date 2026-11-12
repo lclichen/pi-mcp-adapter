@@ -182,6 +182,7 @@ export class McpServerManager {
   private oauthRuntime: McpOAuthRuntime | undefined;
   private acceptedUrlElicitations = new Map<string, Set<string>>();
   private defaultRequestTimeoutMs: number | undefined;
+  private dynamicHeadersProvider: (() => Record<string, string>) | undefined;
   private runtimeSignal: AbortSignal | undefined;
   private closePromises = new Map<string, Promise<void>>();
   private closeGenerations = new Map<string, number>();
@@ -230,6 +231,11 @@ export class McpServerManager {
 
   setDefaultRequestTimeoutMs(timeoutMs: number | undefined): void {
     this.defaultRequestTimeoutMs = normalizeRequestTimeoutMs(timeoutMs);
+  }
+
+  /** Per-session identity headers merged into every HTTP transport request. */
+  setDynamicHeadersProvider(provider: (() => Record<string, string>) | undefined): void {
+    this.dynamicHeadersProvider = provider;
   }
 
   setTraceConfig(settings: McpTraceSettings | undefined): void {
@@ -919,6 +925,17 @@ export class McpServerManager {
         new Headers(headers);
       } catch {
         throw new Error(`Failed to resolve MCP server "${serverName}" HTTP command secret: command returned an invalid header value`);
+      }
+    }
+
+    // Apply the host-provided per-session identity last so a static config
+    // header cannot spoof the session/user identifiers.
+    if (this.dynamicHeadersProvider) {
+      Object.assign(headers, this.dynamicHeadersProvider());
+      try {
+        new Headers(headers);
+      } catch {
+        throw new Error(`Failed to build MCP server "${serverName}" HTTP identity headers`);
       }
     }
 

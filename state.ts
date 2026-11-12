@@ -7,6 +7,7 @@ import type { ToolMetadata, PromptMetadata, McpConfig, UiSessionMessages, UiStre
 import type { UiResourceHandler } from "./ui-resource-handler.ts";
 import type { McpRuntimeOwner } from "./runtime-owner.ts";
 import type { McpOAuthRuntime } from "./mcp-auth-flow.ts";
+import { buildMcpIdentityMeta } from "./session-identity.ts";
 
 export interface CompletedUiSession {
   serverName: string;
@@ -52,9 +53,22 @@ export interface McpExtensionState {
   consentManager: ConsentManager;
   uiServer: UiServerHandle | null;
   completedUiSessions: CompletedUiSession[];
+  sessionId: string | undefined;
   openBrowser: (url: string) => Promise<void>;
   ui?: ExtensionContext["ui"];
   sendMessage?: SendMessageFn;
   onToolMetadataUpdated?: (serverName: string, reason: string) => void | Promise<void>;
   statusEvents?: McpStatusEventBus;
+}
+
+export function buildMcpRequestMeta(
+  sessionId: string | undefined,
+  requestMeta?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const identityMeta = buildMcpIdentityMeta(sessionId);
+  if (!identityMeta) return requestMeta;
+  return {
+    ...requestMeta,
+    ...identityMeta,
+  };
 }
