@@ -79,6 +79,7 @@
     "index.ts",
     "error-signal.ts",
     "state.ts",
+    "session-identity.ts",
     "utils.ts",
     "abort.ts",
     "runtime-owner.ts",
