@@ -11,7 +11,7 @@ import { combineAbortSignals, isAbortError } from "./runtime-owner.ts";
 import { buildToolMetadata, getToolNames, formatSchema } from "./tool-metadata.ts";
 import { renderTsShape } from "./ts-shape.ts";
 import { reconstructPromptMetadata } from "./metadata-cache.ts";
-import { resolveMcpResultContent, transformMcpResourceContents } from "./tool-registrar.ts";
+import { resolveMcpResult, transformMcpResourceContents } from "./tool-registrar.ts";
 import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from "./mcp-output-guard.ts";
 import { maybeStartUiSession, summarizeUiSessionResult, type UiSessionRuntime } from "./ui-session.ts";
 import { formatAuthRequiredMessage, formatMcpStatus, normalizeToolArguments, resolveServerUrl, truncateAtWord } from "./utils.ts";
@@ -1645,16 +1645,22 @@ export async function executeCall(
 
     if (toolMeta.uiResourceUri) {
       if (result.isError) {
-        const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
+        const { content, images } = resolveMcpResult(result as Record<string, unknown>, state.owner?.signal);
         const outputContent = content.length > 0 ? content : [{ type: "text" as const, text: "(empty result)" }];
         const guarded = await guardMcpOutput(outputContent, { ...outputGuardOptions, prefix: "Error: ", emptyTextFallback: "Tool execution failed", rawMcpResult: result });
         return {
           content: guarded.content,
-          details: { mode: "call", error: "tool_error", ...callIdentity, ...guardedMcpDetails(guarded) },
+          details: {
+            mode: "call",
+            error: "tool_error",
+            ...callIdentity,
+            ...(images.length > 0 ? { mcpImages: images } : {}),
+            ...guardedMcpDetails(guarded),
+          },
         };
       }
 
-      const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
+      const { content, images } = resolveMcpResult(result as Record<string, unknown>, state.owner?.signal);
       const outputContent = content.length > 0 ? content : [{ type: "text" as const, text: "(empty result)" }];
       const uiSummary = summarizeUiSessionResult(uiSession);
       const guarded = await guardMcpOutput(outputContent, { ...outputGuardOptions, suffix: `\n\n${uiSummary.message}`, rawMcpResult: result });
@@ -1663,6 +1669,7 @@ export async function executeCall(
         details: {
           mode: "call",
           ...guardedMcpDetails(guarded),
+          ...(images.length > 0 ? { mcpImages: images } : {}),
           ...callIdentity,
           uiOpen: uiSummary.uiOpen,
           uiViewer: uiSummary.uiViewer,
@@ -1672,21 +1679,32 @@ export async function executeCall(
     }
 
     if (result.isError) {
-      const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
+      const { content, images } = resolveMcpResult(result as Record<string, unknown>, state.owner?.signal);
       const outputContent = content.length > 0 ? content : [{ type: "text" as const, text: "(empty result)" }];
       const guarded = await guardMcpOutput(outputContent, { ...outputGuardOptions, prefix: "Error: ", emptyTextFallback: "Tool execution failed", rawMcpResult: result });
       return {
         content: guarded.content,
-        details: { mode: "call", error: "tool_error", ...callIdentity, ...guardedMcpDetails(guarded) },
+        details: {
+          mode: "call",
+          error: "tool_error",
+          ...callIdentity,
+          ...(images.length > 0 ? { mcpImages: images } : {}),
+          ...guardedMcpDetails(guarded),
+        },
       };
     }
 
-    const content = resolveMcpResultContent(result as Record<string, unknown>, state.owner?.signal);
+    const { content, images } = resolveMcpResult(result as Record<string, unknown>, state.owner?.signal);
     const outputContent = content.length > 0 ? content : [{ type: "text" as const, text: "(empty result)" }];
     const guarded = await guardMcpOutput(outputContent, { ...outputGuardOptions, rawMcpResult: result });
     return {
       content: guarded.content,
-      details: { mode: "call", ...guardedMcpDetails(guarded), ...callIdentity },
+      details: {
+        mode: "call",
+        ...guardedMcpDetails(guarded),
+        ...(images.length > 0 ? { mcpImages: images } : {}),
+        ...callIdentity,
+      },
     };
   } catch (error) {
     if (error instanceof SessionRecoveryAuthRequiredError) {

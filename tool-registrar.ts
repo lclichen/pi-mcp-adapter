@@ -5,7 +5,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { McpContent, ContentBlock } from "./types.ts";
+import type { McpContent, ContentBlock, McpImageInfo } from "./types.ts";
+import { extractInlineImages, imageIdForBase64, normalizeInlineImageMime } from "./inline-images.ts";
 
 const MAX_BINARY_RESOURCE_BYTES = 10 * 1024 * 1024;
 const MAX_SESSION_RESOURCE_BYTES = 100 * 1024 * 1024;
@@ -184,66 +185,243 @@ export function transformMcpResourceContents(contents: McpResourceContent[], sco
   });
 }
 
-export function transformMcpContent(content: McpContent[], scope?: object): ContentBlock[] {
-  return content.map(c => {
-    if (c.type === "text") {
-      return { type: "text" as const, text: c.text ?? "" };
+export interface McpResultContent {
+  content: ContentBlock[];
+  /** Unique images carried by this result; bytes remain in `content`. */
+  images: McpImageInfo[];
+}
+
+interface ImageEntry {
+  info: McpImageInfo;
+  data: string;
+  mimeType: string;
+  alt: string;
+  serverId?: string;
+}
+
+const MCP_IMAGE_MARKER_RE = /\[\[image:([^\]|\n]+)(?:\|([^\]\n]*))?\]\]/g;
+const MARKER_ALT_MAX = 160;
+
+function metaString(content: McpContent, key: string): string | undefined {
+  const value = content._meta?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function markerFor(entry: ImageEntry, altOverride?: string): string {
+  const alt = (altOverride || entry.alt)
+    .replace(/[|\]\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MARKER_ALT_MAX);
+  return `[[image:${entry.info.id}${alt ? `|${alt}` : ""}]]`;
+}
+
+function normalizedBase64(data: string | undefined): { data: string; bytes: number } | null {
+  const normalized = (data ?? "").replace(/\s+/g, "");
+  if (normalized.length === 0 || normalized.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return null;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return { data: normalized, bytes: Math.floor((normalized.length * 3) / 4) - padding };
+}
+
+function imageEntryFromBlock(block: McpContent): ImageEntry | null {
+  if (block.type !== "image") return null;
+  const mimeType = normalizeInlineImageMime(block.mimeType);
+  const decoded = normalizedBase64(block.data);
+  if (!mimeType || !decoded) return null;
+  const id = imageIdForBase64(decoded.data);
+  const alt = metaString(block, "amedac/alt") ?? "image";
+  const serverId = metaString(block, "amedac/imageId");
+  return {
+    info: { id, mimeType, bytes: decoded.bytes, ...(alt !== "image" ? { alt } : {}) },
+    data: decoded.data,
+    mimeType,
+    alt,
+    ...(serverId ? { serverId } : {}),
+  };
+}
+
+function imageEntryFromResource(block: McpContent): ImageEntry | null {
+  if (block.type !== "resource" || typeof block.resource?.blob !== "string") return null;
+  const mimeType = normalizeInlineImageMime(block.resource.mimeType ?? block.mimeType);
+  const decoded = normalizedBase64(block.resource.blob);
+  if (!mimeType || !decoded) return null;
+  const id = imageIdForBase64(decoded.data);
+  const alt = block.resource.uri || block.name || "image";
+  const serverId = metaString(block, "amedac/imageId");
+  return {
+    info: { id, mimeType, bytes: decoded.bytes, alt },
+    data: decoded.data,
+    mimeType,
+    alt,
+    ...(serverId ? { serverId } : {}),
+  };
+}
+
+function pushText(out: ContentBlock[], text: string): void {
+  if (text) out.push({ type: "text", text });
+}
+
+function pushImageBlock(out: ContentBlock[], entry: ImageEntry, emitted: Set<string>): void {
+  if (emitted.has(entry.info.id)) return;
+  emitted.add(entry.info.id);
+  out.push({ type: "image", data: entry.data, mimeType: entry.mimeType });
+}
+
+function pushMarker(out: ContentBlock[], entry: ImageEntry): void {
+  const last = out[out.length - 1];
+  const prefix = last?.type === "text" && !/\s$/.test(last.text) ? "\n\n" : "";
+  out.push({ type: "text", text: `${prefix}${markerFor(entry)}\n\n` });
+}
+
+/**
+ * Transform MCP content into pi blocks while preserving image positions.
+ *
+ * Standard `ImageContent` blocks become pi image blocks and get an inline
+ * `[[image:id|alt]]` marker when their surrounding text did not already carry
+ * one. Legacy data-URI images inside text are extracted first, so the model
+ * only sees a short marker instead of hundreds of kilobytes of base64.
+ */
+export function transformMcpContentWithImages(content: McpContent[], scope?: object): McpResultContent {
+  const preparedText = content.map((block) =>
+    block.type === "text" ? extractInlineImages(block.text ?? "") : null,
+  );
+  const entries: ImageEntry[] = [];
+  const byId = new Map<string, ImageEntry>();
+  const byServerId = new Map<string, ImageEntry>();
+  const blockEntries = new Map<number, ImageEntry>();
+
+  const remember = (entry: ImageEntry) => {
+    entries.push(entry);
+    byId.set(entry.info.id, entry);
+    if (entry.serverId) byServerId.set(entry.serverId, entry);
+  };
+
+  content.forEach((block, index) => {
+    const entry = imageEntryFromBlock(block) ?? imageEntryFromResource(block);
+    if (entry) {
+      blockEntries.set(index, entry);
+      remember(entry);
     }
-    if (c.type === "image") {
-      return {
-        type: "image" as const,
-        data: c.data ?? "",
-        mimeType: c.mimeType ?? "image/png",
-      };
-    }
-    if (c.type === "resource") {
-      const resourceUri = c.resource?.uri ?? "(no URI)";
-      if (c.resource && "blob" in c.resource && typeof c.resource.blob === "string") {
-        const binaryResource = c.resource as typeof c.resource & { mimeType?: string; blob: string };
-        return {
-          type: "text" as const,
-          text: materializeBinaryResource(binaryResource, scope),
-        };
-      }
-      const resourceContent = c.resource?.text ?? (c.resource ? JSON.stringify(c.resource) : "(no content)");
-      return {
-        type: "text" as const,
-        text: `[Resource: ${resourceUri}]\n${resourceContent}`,
-      };
-    }
-    if (c.type === "resource_link") {
-      const linkName = c.name ?? c.uri ?? "unknown";
-      const linkUri = c.uri ?? "(no URI)";
-      return {
-        type: "text" as const,
-        text: `[Resource Link: ${linkName}]\nURI: ${linkUri}`,
-      };
-    }
-    if (c.type === "audio") {
-      return {
-        type: "text" as const,
-        text: `[Audio content: ${c.mimeType ?? "audio/*"}]`,
-      };
-    }
-    return { type: "text" as const, text: JSON.stringify(c) };
   });
+  for (const prepared of preparedText) {
+    if (!prepared) continue;
+    for (const inline of prepared.images) {
+      if (byId.has(inline.id)) continue;
+      remember({
+        info: { id: inline.id, mimeType: inline.mimeType, bytes: inline.bytes, alt: inline.alt },
+        data: inline.data,
+        mimeType: inline.mimeType,
+        alt: inline.alt,
+      });
+    }
+  }
+
+  // Images already named by a text marker keep that marker; only unreferenced
+  // images get one inserted at their position.
+  const referenced = new Set<string>();
+  for (const prepared of preparedText) {
+    if (!prepared) continue;
+    for (const match of prepared.text.matchAll(MCP_IMAGE_MARKER_RE)) {
+      if (match[1]) referenced.add(match[1]);
+    }
+  }
+
+  const out: ContentBlock[] = [];
+  const emitted = new Set<string>();
+  content.forEach((block, index) => {
+    if (block.type === "text") {
+      const prepared = preparedText[index]!;
+      const text = prepared.text.replace(MCP_IMAGE_MARKER_RE, (_full, markerId: string, alt?: string) => {
+        const entry = byServerId.get(markerId) ?? byId.get(markerId);
+        if (!entry) return alt?.trim() || `[image missing: ${markerId}]`;
+        return markerFor(entry, alt);
+      });
+      pushText(out, text);
+      for (const inline of prepared.images) {
+        const entry = byId.get(inline.id);
+        if (entry) pushImageBlock(out, entry, emitted);
+      }
+      return;
+    }
+
+    const entry = blockEntries.get(index);
+    if (entry) {
+      if (!referenced.has(entry.serverId ?? entry.info.id)) pushMarker(out, entry);
+      pushImageBlock(out, entry, emitted);
+      return;
+    }
+
+    if (block.type === "image") {
+      // Unsupported/legacy image shape: keep it as a pi image block so the
+      // provider can decide; there is no marker because pi-web cannot serve it.
+      out.push({
+        type: "image" as const,
+        data: block.data ?? "",
+        mimeType: block.mimeType ?? "image/png",
+      });
+      return;
+    }
+    if (block.type === "resource") {
+      const resourceUri = block.resource?.uri ?? "(no URI)";
+      if (block.resource && "blob" in block.resource && typeof block.resource.blob === "string") {
+        const binaryResource = block.resource as typeof block.resource & { mimeType?: string; blob: string };
+        pushText(out, materializeBinaryResource(binaryResource, scope));
+        return;
+      }
+      const resourceContent = block.resource?.text ?? (block.resource ? JSON.stringify(block.resource) : "(no content)");
+      pushText(out, `[Resource: ${resourceUri}]\n${resourceContent}`);
+      return;
+    }
+    if (block.type === "resource_link") {
+      const linkName = block.name ?? block.uri ?? "unknown";
+      const linkUri = block.uri ?? "(no URI)";
+      pushText(out, `[Resource Link: ${linkName}]\nURI: ${linkUri}`);
+      return;
+    }
+    if (block.type === "audio") {
+      pushText(out, `[Audio content: ${block.mimeType ?? "audio/*"}]`);
+      return;
+    }
+    pushText(out, JSON.stringify(block));
+  });
+
+  return {
+    content: out,
+    images: entries
+      .filter((entry, index) => entries.findIndex((candidate) => candidate.info.id === entry.info.id) === index)
+      .map((entry) => entry.info),
+  };
+}
+
+export function transformMcpContent(content: McpContent[], scope?: object): ContentBlock[] {
+  return transformMcpContentWithImages(content, scope).content;
 }
 
 /**
  * Resolve a tool result's content blocks, appending structuredContent when it
  * coexists with ordinary content and falling back to it when content is empty.
  */
-export function resolveMcpResultContent(result: Record<string, unknown>, scope?: object): ContentBlock[] {
-  const blocks = transformMcpContent((Array.isArray(result.content) ? result.content : []) as McpContent[], scope);
+export function resolveMcpResult(result: Record<string, unknown>, scope?: object): McpResultContent {
+  const transformed = transformMcpContentWithImages(
+    (Array.isArray(result.content) ? result.content : []) as McpContent[],
+    scope,
+  );
   if (result.structuredContent !== undefined && result.structuredContent !== null) {
     const structured = stringifyStructuredContent(result.structuredContent);
-    if (blocks.length > 0) {
-      return [...blocks, { type: "text" as const, text: `structuredContent:\n${structured}` }];
+    if (transformed.content.length > 0) {
+      return {
+        ...transformed,
+        content: [...transformed.content, { type: "text" as const, text: `structuredContent:\n${structured}` }],
+      };
     }
-    return [{ type: "text" as const, text: structured }];
+    return { ...transformed, content: [{ type: "text" as const, text: structured }] };
   }
+  return transformed;
+}
 
-  return blocks;
+export function resolveMcpResultContent(result: Record<string, unknown>, scope?: object): ContentBlock[] {
+  return resolveMcpResult(result, scope).content;
 }
 
 function stringifyStructuredContent(value: unknown): string {

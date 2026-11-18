@@ -218,12 +218,30 @@ export interface McpContent {
     mimeType?: string;
     resource?: {
         uri: string;
+        mimeType?: string;
         text?: string;
         blob?: string;
     };
     uri?: string;
     name?: string;
     description?: string;
+    /** MCP annotations; `audience` is the standard user/assistant hint. */
+    annotations?: {
+        audience?: string[];
+        priority?: number;
+        lastModified?: string;
+        [key: string]: unknown;
+    };
+    /** Protocol extension area. pi-web reads `amedac/imageId` and `amedac/alt`. */
+    _meta?: Record<string, unknown>;
+}
+/** Metadata for one image carried by a tool result; the bytes stay in content. */
+export interface McpImageInfo {
+    /** Stable content id: `img_` + first 16 hex chars of sha256(base64). */
+    id: string;
+    mimeType: string;
+    bytes: number;
+    alt?: string;
 }
 export type ContentBlock = TextContent | ImageContent;
 export interface OAuthConfig {

@@ -419,9 +419,16 @@ export function formatMcpScriptCallSummary(
   return { failed, preview: [tools, meta].filter(Boolean).join(" · ") };
 }
 
+const INLINE_IMAGE_MARKER_RE = /\[\[image:img_[A-Za-z0-9]+(?:\|[^\]\n]*)?\]\]/g;
+
+/** TUI renders image blocks as placeholders; the marker is a web-only anchor. */
+function stripInlineImageMarkers(text: string): string {
+  return text.replace(INLINE_IMAGE_MARKER_RE, "").replace(/[ \t]+\n/g, "\n");
+}
+
 function blockToLines(block: McpToolContentBlock): string[] {
   if (block.type === "text") {
-    return block.text.split("\n");
+    return stripInlineImageMarkers(block.text).split("\n");
   }
   return [`[image: ${block.mimeType}]`];
 }
@@ -475,9 +482,10 @@ function collectCollapsedResultLines(
     }
 
     let start = 0;
-    while (start <= block.text.length) {
-      const newline = block.text.indexOf("\n", start);
-      const line = newline === -1 ? block.text.slice(start) : block.text.slice(start, newline);
+    const text = stripInlineImageMarkers(block.text);
+    while (start <= text.length) {
+      const newline = text.indexOf("\n", start);
+      const line = newline === -1 ? text.slice(start) : text.slice(start, newline);
       if (!appendLine(line)) break;
       if (newline === -1) break;
       start = newline + 1;
